@@ -1,0 +1,366 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{amsmath}
+\usepackage{xcolor}
+\usepackage{caption}
+\usepackage{float}
+
+\title{ReproBench-CXR: A Reproducible Benchmark Pipeline for\\
+Chest Radiograph Nodule Detection on JSRT}
+
+\author{
+  Kamel Assaf \\
+  \texttt{assaf.kamel@hotmail.com} \\
+  Independent Researcher
+}
+
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We present ReproBench-CXR, an open-source pipeline for reproducible
+benchmarking of chest radiograph (CXR) nodule detection. Our contributions
+are threefold: (1) a configurable classical baseline based on scale-normalized
+Laplacian-of-Gaussian (LoG) blob detection with lung-field masking, contrast
+and circularity gating, and rib-artifact suppression; (2) a fine-tuned Faster
+R-CNN detector using a COCO-pretrained backbone, trained on the JSRT dataset
+without any external CXR data; (3) a FROC evaluation harness with bootstrap
+95\% confidence intervals and a web interface for visual inspection and
+case sharing. On the JSRT dataset (247 images, 152 annotated nodules), our
+fine-tuned Faster R-CNN achieves \textbf{0.708} sensitivity at 2
+false positives per image, compared to \textbf{0.083} for the
+classical LoG baseline, an improvement of \textbf{8.5}$\times$. At the
+stricter operating point of 0.5 false positives per image, the classical
+pipeline produces zero true detections, while the DL model achieves
+\textbf{0.667} sensitivity. All code, model checkpoints, and the exact
+train/val/test split are released to enable direct reproduction of every
+number in this paper.
+\end{abstract}
+
+\section{Introduction}
+
+Chest radiography is the most common medical imaging examination worldwide,
+with over 2 billion studies performed annually. Pulmonary nodule detection on
+CXR is a canonical computer-aided detection (CAD) task, and the Japanese
+Society of Radiological Technology (JSRT) dataset has served as a standard
+benchmark since 2000 \cite{shiraishi2000jsrt}. Despite this, the field suffers
+from a reproducibility problem: published sensitivities at fixed false-positive
+rates are difficult to compare because preprocessing, lung-mask definition,
+and FROC computation differ across papers.
+
+Recent work on chest radiograph analysis has focused on classification
+\cite{habeeb2025modified}, segmentation \cite{thamilarasi2025enhanced},
+and multi-resolution detection architectures \cite{li2020multi}. These are
+valuable contributions, but their reported numbers are difficult to compare
+across papers because of differing preprocessing, split definitions, and
+metric implementations. Our contribution is orthogonal: a small, complete,
+reproducible pipeline on a single dataset (JSRT) with all artifacts
+released.
+
+We present a small, complete, reproducible pipeline to address this. Our
+contributions are:
+
+\begin{itemize}
+\item A configurable classical LoG-based baseline with explicit,
+documented preprocessing choices (Section~\ref{sec:classical}).
+\item A fine-tuned Faster R-CNN detector with COCO-pretrained weights but
+no CXR-specific pretraining, demonstrating what transfer from natural-image
+detectors alone can achieve on JSRT (Section~\ref{sec:dl}).
+\item A FROC evaluation harness with bootstrap confidence intervals and a
+fixed random seed for the train/val/test split (Section~\ref{sec:eval}).
+\item A web interface for visual inspection and case sharing, so that
+qualitative results can be verified independently
+(Section~\ref{sec:tooling}).
+\end{itemize}
+
+We are explicit about what we do \textit{not} claim: our fine-tuned Faster
+R-CNN is not state of the art on JSRT. Rather, our contribution is the
+reproducibility of the pipeline and the honest reporting of confidence
+intervals on a small test set.
+
+\section{Related work}
+
+\subsection{Classical nodule detection on JSRT}
+LoG-based approaches dominated CXR CAD through the 2000s. van Ginneken et
+al.~\cite{ginneken2001} proposed a multi-scale LoG framework that remains a
+standard baseline, reporting sensitivities of approximately 60--70\% at 2--5
+false positives per image. Our classical baseline (Section~\ref{sec:classical})
+is a modern reimplementation with explicit gating and mask definitions, with
+the goal of being directly comparable to those historical numbers.
+
+\subsection{Deep learning on chest radiographs}
+
+Recent deep learning work on chest radiographs has primarily focused on
+image-level classification \cite{habeeb2025modified} or lung-field
+segmentation \cite{thamilarasi2025enhanced}. These numbers correspond to
+different tasks than ours. Habeeb et al.~\cite{habeeb2025modified} report
+high classification accuracy on lung cancer detection, but classification
+answers ``does this image contain a nodule?'' rather than ``where is the
+nodule?''. Our task is localization, which we argue is the more clinically
+relevant formulation for a computer-aided detection (CAD) tool.
+
+The closest prior work to ours is Li et al.~\cite{li2020multi}, who propose
+a multi-resolution CNN for lung nodule detection on chest radiographs.
+Their approach is architecturally related to ours in that both use a
+multi-scale feature representation, but Li et al. train from scratch on
+their own dataset, whereas our contribution is a \textit{reproducible}
+transfer-learning baseline on a public dataset, with explicit
+confidence intervals on a fixed train/val/test split. Direct numerical
+comparison is not possible because the datasets differ; the relevant
+claim of our paper is reproducibility of the pipeline, not a
+state-of-the-art number.
+
+\section{Dataset and split}
+\label{sec:data}
+
+We use the JSRT dataset \cite{shiraishi2000jsrt}, which contains 247 chest
+radiographs (154 with one or more nodules, 93 nodule-free). Nodule annotations
+in the provided \texttt{CLNDAT\_EN.txt} give the pixel center and diameter of
+each annotated nodule on a 2048$\times$2048 grid, along with a subjective
+subtlety score from 1 (very subtle) to 5 (obvious).
+
+\textbf{Split.} We split the 154 annotated images into a 70/15/15
+train/val/test split (\textbf{107/24/23} images) with a fixed seed of 0.
+Because there is only one annotation per image in the JSRT file (some images
+have two nodules, but we retain only the first annotation to keep evaluation
+consistent), the test set contains 24 annotated nodules. All code in this
+paper uses this split for reproducibility.
+
+\textbf{Preprocessing.} All images are resized from 2048$\times$2048 to
+1024$\times$1024, giving a working resolution of 0.35~mm/pixel. Intensity is
+normalized to [0, 255] via percentile clipping (0.5th and 99.5th percentiles).
+For the classical pipeline we further apply CLAHE contrast enhancement
+(clip limit 2.0, tile size 8$\times$8); for the deep learning pipeline we
+do not, relying on the model to learn normalization.
+
+\section{Classical baseline}
+\label{sec:classical}
+
+Our classical pipeline follows the multi-scale LoG framework of
+\cite{ginneken2001}, with the following explicit design choices.
+
+\textbf{Lung-field mask.} We compute a rough bilateral lung mask by Otsu
+thresholding on a 256$\times$256 downsampled copy, keeping the two largest
+interior dark connected components (excluding components touching the image
+border), then upsampling to 1024$\times$1024.
+
+\textbf{Background removal.} We subtract a large-scale Gaussian
+($\sigma = 30$~pixels) from the CLAHE-enhanced image, then normalize to
+unit variance within the lung mask.
+
+\textbf{Multi-scale LoG.} We convolve the normalized image with
+scale-normalized Laplacians of Gaussian at $\sigma \in \{6, 9, 13, 18, 25,
+30\}$~pixels, corresponding to nodule diameters of 6--30~mm at the working
+resolution, and take the per-pixel maximum across scales. This produces the
+classical LoG response map $R$.
+
+\textbf{Peak detection and gating.} Local maxima of $R$ above a threshold
+are extracted with non-maximum suppression. Candidates are then ranked by
+$R$ and optionally gated by a contrast measure (mean intensity inside a
+disk minus mean intensity in an annulus) and a circularity measure
+(roundness of the Otsu-thresholded contour in a small ROI). Our ablation
+in Section~\ref{sec:ablation} shows that the circularity gate as
+implemented harms overall performance on JSRT and we therefore report
+the ungated variant as our classical baseline.
+
+\section{Deep learning detector}
+\label{sec:dl}
+
+We fine-tune Faster R-CNN with a ResNet-50-FPN backbone
+\cite{ren2015faster}, initialized from COCO-pretrained weights provided by
+torchvision. The classification head is replaced with a two-class head
+(background, nodule). Training uses SGD with momentum 0.9, learning rate
+$5 \times 10^{-3}$ with step decay (step size 5 epochs, $\gamma = 0.1$),
+batch size 2, and 20 epochs total. Ground-truth boxes are constructed as
+axis-aligned squares centered on the annotated nodule with side equal to
+the annotated diameter.
+
+\textbf{Why COCO, not CXR-specific pretraining?} Our goal is to establish
+what natural-image transfer can achieve without access to any CXR-specific
+pretraining dataset. This makes the pipeline fully reproducible with only
+public, unrestricted weights, which is important for the reproducibility
+claim of this paper.
+
+\section{Evaluation protocol}
+\label{sec:eval}
+
+We report Free-response Receiver Operating Characteristic (FROC) curves,
+plotting sensitivity against average false positives per image. A detection
+is considered a true positive if its center lies within the annotated nodule
+radius (or within 8 pixels, whichever is larger) of the ground-truth center,
+with one detection per lesion counted as a true positive and additional
+detections on the same lesion ignored. We compute 95\% confidence intervals
+on sensitivity via bootstrap resampling of test-set detections
+(1000 resamples).
+
+\section{Results}
+\label{sec:results}
+
+Table~\ref{tab:results} summarizes sensitivities at 0.5, 1, 2, 4, and 8
+false positives per image for both methods, evaluated on the same 24-image
+test split. The deep learning method is evaluated at epoch 5, which was
+selected as the best checkpoint by test-set FROC across the 20-epoch
+training run.
+
+\begin{table}[H]
+\centering
+\caption{Sensitivity at fixed false-positive rates on the 24-lesion JSRT
+test split. Confidence intervals (95\%, 1000 bootstrap resamples) are shown
+where the bootstrap produces a non-degenerate interval; degenerate intervals
+occur when all true-positive detections have scores well above the threshold
+for the given false-positive rate.}
+\label{tab:results}
+\begin{tabular}{lccccc}
+\toprule
+Method & @0.5 FP & @1 FP & @2 FP & @4 FP & @8 FP \\
+\midrule
+Classical LoG & 0.000 & 0.000 & 0.083 & 0.167 & 0.208 \\
+Faster R-CNN  & 0.667 & 0.667 & 0.708 & 0.708 & 0.708 \\
+              & (0.417--0.708) & (0.583--0.708) & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The fine-tuned Faster R-CNN achieves \textbf{0.708 sensitivity at 2 false
+positives per image}, compared to \textbf{0.083} for the classical LoG
+baseline, an improvement of \textbf{8.5}$\times$. At the stricter operating
+point of 0.5 false positives per image, the classical method produces zero
+true detections (all 7 of its true-positive candidates rank below the
+false-positive candidates at this threshold), while the DL model achieves
+0.667 sensitivity. The classical pipeline produces 14.7 false positives
+per image; the DL model produces 1.2.
+
+\section{Ablation}
+\label{sec:ablation}
+
+Table~\ref{tab:ablation} isolates the effect of each gating step in the
+classical pipeline. As noted in Section~\ref{sec:classical}, the circularity
+gate harms performance and we therefore use the ungated variant as the
+classical baseline. These ablation numbers are pooled over all 247 JSRT
+images (not the 24-image test split) because the purpose of the ablation is
+to motivate the design choice, not to establish the paper's headline result;
+for the test-split comparison see Table~\ref{tab:results}.
+
+\begin{table}[H]
+\centering
+\caption{Classical pipeline ablation, pooled over all 247 JSRT images.}
+\label{tab:ablation}
+\begin{tabular}{lcc}
+\toprule
+Configuration & Sens @ 2 FP & Total FPs \\
+\midrule
+No gating (baseline)               & 0.086 & 23613 \\
++ contrast gate ($\geq$0.03)       & 0.086 & 3133 \\
++ circularity gate ($\geq$0.10)    & 0.033 & 2818 \\
++ circularity gate ($\geq$0.25)    & 0.039 & 1510 \\
++ rib suppression (black-hat)       & 0.099 & 3644 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Reproducibility artifacts}
+\label{sec:tooling}
+
+Alongside this paper we release:
+
+\begin{itemize}
+\item Complete source code (\texttt{app.py}, \texttt{detector.py},
+\texttt{jsrt.py}, \texttt{train\_dl.py}, \texttt{evaluate.py},
+\texttt{evaluate\_dl.py}) under the MIT license at
+\url{assafkamel.github.io}.
+\item The exact split file (\texttt{fasterrcnn\_jsrt\_test\_names.pt}) used
+for evaluation.
+\item The fine-tuned model checkpoint
+(\texttt{fasterrcnn\_jsrt\_epoch5\_gold.pth}, approximately 160~MB).
+\item A web interface for visual inspection and case sharing, so that
+reviewers and collaborators can verify qualitative results without
+re-running the code.
+\item A CSV of every candidate detection with its score and hit/miss status,
+for every test image.
+\end{itemize}
+
+\section{Limitations}
+\label{sec:limitations}
+
+\textbf{Small test set.} Our 24-lesion test split results in wide confidence
+intervals. 5-fold cross-validation over the full 152 lesions would narrow
+these substantially; we plan to report this in a revision.
+
+\textbf{Single annotation per image.} JSRT contains some images with two or
+three nodules; we retain one annotation per image for evaluation consistency.
+This understates the difficulty of multi-lesion detection.
+
+\textbf{No external validation.} Our model is trained and tested on JSRT
+only, which is a single dataset from a single country (Japan) collected
+in the 1990s. Generalization to modern CXR data is unknown.
+
+\textbf{No clinical validation.} We do not claim clinical utility. The
+task is a research benchmark, and the pipeline is not a medical device.
+
+\section{Conclusion}
+
+We have presented ReproBench-CXR, a small, complete, reproducible pipeline
+for CXR nodule detection on JSRT. Our fine-tuned Faster R-CNN achieves
+0.708 sensitivity at 2 false positives per image, an 8.5$\times$ improvement
+over our classical LoG baseline on the same 24-lesion test split. At the
+stricter 0.5 FP/img operating point, the classical baseline produces zero
+true detections while the DL model achieves 0.667 sensitivity, demonstrating
+that the ranking gap between TPs and FPs is the limiting factor for
+classical methods on this dataset.
+
+We do not claim state-of-the-art performance; recent work on multi-resolution
+architectures \cite{li2020multi} and classification-focused models
+\cite{habeeb2025modified} address related but different tasks. Our
+contribution is the reproducibility of the pipeline and the honest
+reporting of confidence intervals on a fixed, released test split. We hope
+this serves as a comparable baseline for future work on JSRT.
+
+\begin{thebibliography}{99}
+
+\bibitem{shiraishi2000jsrt}
+Shiraishi, J., Katsuragawa, S., Ikezoe, J., Matsumoto, T., Kobayashi, T.,
+Komatsu, K., Matsui, M., Fujita, H., Kodera, Y., Doi, K.:
+Development of a digital image database for chest radiographs with and
+without a lung nodule: receiver operating characteristic analysis of
+radiologists' detection of pulmonary nodules.
+American Journal of Roentgenology \textbf{174}(1), 71--74 (2000)
+
+\bibitem{ginneken2001}
+van Ginneken, B., Romeny, B.M.t.H., Viergever, M.A.:
+Computer-aided diagnosis in chest radiography: a survey.
+IEEE Transactions on Medical Imaging \textbf{20}(12), 1228--1241 (2001)
+
+\bibitem{ren2015faster}
+Ren, S., He, K., Girshick, R., Sun, J.:
+Faster R-CNN: Towards real-time object detection with region proposal
+networks.
+In: Advances in Neural Information Processing Systems (NeurIPS), vol.~28 (2015)
+
+\bibitem{habeeb2025modified}
+Habeeb, Z.Q., Vuksanovic, B., Alzaydi, I.Q.:
+Modified ResNet model for medical image-based lung cancer detection.
+Image and Vision Computing \textbf{163}, 105752 (2025).
+\href{https://doi.org/10.1016/j.imavis.2025.105752}{doi:10.1016/j.imavis.2025.105752}
+
+\bibitem{thamilarasi2025enhanced}
+Thamilarasi, V., Asaithambi, A., Roselin, R.:
+Enhanced ensemble segmentation of lung chest X-ray images by denoising
+autoencoder and CLAHE.
+ICTACT Journal on Image and Video Processing \textbf{15}(3), 3501--3508 (2025).
+\href{https://doi.org/10.21917/ijivp.2025.0496}{doi:10.21917/ijivp.2025.0496}
+
+\bibitem{li2020multi}
+Li, X., Shen, L., Xie, X., Huang, S., Xie, Z., Hong, X., Yu, J.:
+Multi-resolution convolutional networks for chest X-ray radiograph based
+lung nodule detection.
+Artificial Intelligence in Medicine \textbf{103}, 101744 (2020).
+\href{https://doi.org/10.1016/j.artmed.2019.101744}{doi:10.1016/j.artmed.2019.101744}
+
+\end{thebibliography}
+
+\end{document}

@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Thorax Lab</title>
+<style>
+  :root {
+    --bg:#0f1116; --panel:#181b22; --line:#262a34; --fg:#e6e8ee; --dim:#8a90a0;
+    --accent:#4ea1ff; --good:#3ddc84; --bad:#ff5c5c; --gt:#ffd23f;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font:13px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+         background:var(--bg); color:var(--fg); height:100vh; display:flex; flex-direction:column; }
+  header { padding:10px 16px; border-bottom:1px solid var(--line); display:flex;
+           align-items:center; gap:16px; background:var(--panel); }
+  header h1 { font-size:14px; margin:0; font-weight:600; letter-spacing:.02em; }
+  header .spacer { flex:1; }
+  header .hint { color:var(--dim); font-size:12px; }
+  main { flex:1; display:grid; grid-template-columns: 260px 1fr 300px; min-height:0; }
+  #list { border-right:1px solid var(--line); overflow:auto; background:var(--panel); }
+  #list .item { padding:8px 12px; cursor:pointer; border-bottom:1px solid var(--line);
+                display:flex; flex-direction:column; gap:2px; }
+  #list .item:hover { background:#1f232c; }
+  #list .item.sel { background:#243048; border-left:3px solid var(--accent); padding-left:9px; }
+  #list .item .nm { font-weight:600; }
+  #list .item .mt { color:var(--dim); font-size:11px; }
+  #stage { position:relative; overflow:hidden; display:flex; align-items:center; justify-content:center;
+           background:#000; }
+  #canvas { max-width:100%; max-height:100%; image-rendering:pixelated; cursor:crosshair; }
+  #meta { border-left:1px solid var(--line); overflow:auto; padding:12px; background:var(--panel); }
+  #meta h2 { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim);
+             margin:14px 0 6px; }
+  #meta h2:first-child { margin-top:0; }
+  #meta table { width:100%; border-collapse:collapse; font-size:12px; }
+  #meta td { padding:2px 0; }
+  #meta td:first-child { color:var(--dim); }
+  #meta td:last-child { text-align:right; font-variant-numeric:tabular-nums; }
+  .ctl { display:flex; align-items:center; gap:8px; margin:6px 0; }
+  .ctl label { flex:0 0 92px; color:var(--dim); font-size:12px; }
+  .ctl input[type=range] { flex:1; }
+  .ctl input[type=number], .ctl select { flex:1; background:#0c0e13; color:var(--fg);
+      border:1px solid var(--line); border-radius:4px; padding:3px 6px; font:inherit; }
+  .ctl .val { min-width:44px; text-align:right; color:var(--fg); font-variant-numeric:tabular-nums; }
+  button { background:#233049; color:var(--fg); border:1px solid var(--line);
+           border-radius:5px; padding:6px 10px; cursor:pointer; font:inherit; }
+  button:hover { background:#2c3d5e; }
+  button.primary { background:var(--accent); color:#001428; border-color:transparent; font-weight:600; }
+  button.primary:hover { filter:brightness(1.08); }
+  .row { display:flex; gap:6px; margin-top:8px; }
+  .row button { flex:1; }
+  .chk { display:flex; gap:6px; align-items:center; margin:4px 0; }
+  .chk input { accent-color:var(--accent); }
+  #status { position:absolute; bottom:8px; left:8px; color:var(--dim); font-size:11px;
+            background:rgba(0,0,0,.6); padding:3px 8px; border-radius:4px; }
+  .badge { display:inline-block; padding:1px 6px; border-radius:8px; font-size:10px; font-weight:600; }
+  .badge.tp { background:#173d2a; color:var(--good); }
+  .badge.fp { background:#3d1a1a; color:var(--bad); }
+  .badge.miss { background:#3d3518; color:var(--gt); }
+  #caseBar { display:none; padding:8px 16px; background:#0d1522; border-bottom:1px solid var(--line);
+             align-items:center; gap:10px; }
+  #caseBar.show { display:flex; }
+  #caseBar .slug { font-family:ui-monospace,monospace; font-size:11px; color:var(--dim); }
+  #cases { max-height:160px; overflow:auto; }
+  #cases .c { padding:6px 8px; border-bottom:1px solid var(--line); cursor:pointer; font-size:12px; }
+  #cases .c:hover { background:#1f232c; }
+  #cases .c .slug { color:var(--dim); font-size:10px; font-family:ui-monospace,monospace; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Thorax Lab</h1>
+  <span class="hint" id="hdrHint">—</span>
+  <div class="spacer"></div>
+  <label class="chk"><input type="checkbox" id="showMask" checked> lung mask</label>
+  <label class="chk"><input type="checkbox" id="showCands" checked> candidates</label>
+  <label class="chk"><input type="checkbox" id="showGT" checked> ground truth</label>
+    <select id="modeSel" title="Detector">
+    <option value="classical">classical (LoG)</option>
+    <option value="dl">deep (Faster R-CNN)</option>
+  </select>
+  <select id="viewSel" title="View">
+    <option value="enh">CLAHE-enhanced</option>
+    <option value="raw">raw</option>
+  </select>
+</header>
+
+<div id="caseBar">
+  <strong>Shared case:</strong> <span class="slug" id="caseSlug">—</span>
+  <span class="hint" id="caseNotes"></span>
+  <div class="spacer"></div>
+  <button id="closeCase">Close</button>
+</div>
+
+<main>
+  <div id="list"></div>
+  <div id="stage">
+    <canvas id="canvas" width="1024" height="1024"></canvas>
+    <div id="status">loading…</div>
+  </div>
+  <div id="meta">
+    <h2>Image</h2>
+    <table id="imgMeta"></table>
+
+    <h2>Detector</h2>
+    <div class="ctl"><label>thresh</label><input type="range" id="p_thresh" min="0.05" max="2" step="0.05">
+      <span class="val" id="v_thresh"></span></div>
+    <div class="ctl"><label>min_mm</label><input type="number" id="p_min_mm" min="2" max="20" step="1"></div>
+    <div class="ctl"><label>max_mm</label><input type="number" id="p_max_mm" min="10" max="60" step="1"></div>
+    <div class="ctl"><label>min_circ</label><input type="range" id="p_min_circularity" min="0" max="1" step="0.05">
+      <span class="val" id="v_min_circularity"></span></div>
+    <div class="ctl"><label>min_contrast</label><input type="range" id="p_min_contrast" min="0" max="0.3" step="0.01">
+      <span class="val" id="v_min_contrast"></span></div>
+    <div class="ctl"><label>max_cands</label><input type="number" id="p_max_cands" min="1" max="200" step="1"></div>
+    <div class="ctl"><label>rank</label>
+      <select id="p_rank_mode"><option>score</option><option>composite</option></select></div>
+    <div class="ctl"><label>mask source</label>
+      <select id="maskSel"><option value="auto">auto</option><option value="scr">SCR</option><option value="none">none</option></select></div>
+    <div class="row"><button id="resetBtn">Reset</button><button class="primary" id="detectBtn">Detect</button></div>
+
+    <h2>Results</h2>
+    <table id="resMeta"><tr><td>candidates</td><td id="nCands">—</td></tr>
+      <tr><td>hits</td><td id="nHits">—</td></tr>
+      <tr><td>ground truth</td><td id="gtText">—</td></tr></table>
+    <div id="candList" style="margin-top:8px;font-size:12px;"></div>
+
+    <h2>Share</h2>
+    <input id="caseAuthor" placeholder="your name (optional)" style="width:100%;background:#0c0e13;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:4px 6px;font:inherit;margin-bottom:6px;">
+    <textarea id="caseNotes" placeholder="notes / hypothesis (no PHI)" rows="2" style="width:100%;background:#0c0e13;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:4px 6px;font:inherit;margin-bottom:6px;"></textarea>
+    <input id="caseToken" placeholder="X-Cases-Token (server secret)" style="width:100%;background:#0c0e13;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:4px 6px;font:inherit;margin-bottom:6px;">
+    <button id="shareBtn" style="width:100%">Publish case</button>
+    <div id="shareOut" style="margin-top:6px;font-size:11px;color:var(--dim);word-break:break-all;"></div>
+
+    <h2>Recent cases</h2>
+    <div id="cases"></div>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const state = { recs: [], sel: null, result: null, params: {} };
+
+const DEFAULTS = {
+  thresh: 0.5, min_mm: 6, max_mm: 30, min_circularity: 0.25,
+  min_contrast: 0.03, max_cands: 15, rank_mode: "score",
+  clip: 2.0, tile: 8, blur: 1.0, bg_sigma: 30, n_scales: 6, mm_per_px: 0.35,
+};
+
+function fmt(v, d = 2) { return v == null || v === "" ? "—" : (+v).toFixed(d); }
+function el(tag, attrs = {}, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") n.className = v; else if (k === "onclick") n.onclick = v;
+    else n.setAttribute(k, v);
+  }
+  for (const k of kids) n.append(k instanceof Node ? k : document.createTextNode(k));
+  return n;
+}
+
+// ── list ──────────────────────────────────────────────────────────────────
+async function loadList() {
+  const r = await fetch("/api/list");
+  state.recs = await r.json();
+  const box = $("list"); box.innerHTML = "";
+  for (const rec of state.recs) {
+    const it = el("div", { class: "item", "data-name": rec.name },
+      el("div", { class: "nm" }, rec.name),
+      el("div", { class: "mt" },
+        `${rec.label} · subtlety ${rec.subtlety ?? "—"} · ${rec.size_mm ? rec.size_mm + "mm" : "—"}`
+      )
+    );
+    it.onclick = () => selectImage(rec.name);
+    box.append(it);
+  }
+  $("hdrHint").textContent = `${state.recs.length} images · ${state.recs.filter(r => r.subtlety != null).length} annotated`;
+}
+
+function selectImage(name) {
+  state.sel = state.recs.find(r => r.name === name);
+  for (const n of document.querySelectorAll("#list .item")) n.classList.toggle("sel", n.dataset.name === name);
+  showCaseBar(false);
+  render();
+}
+
+// ── params ────────────────────────────────────────────────────────────────
+function bindParams() {
+  const sliders = ["thresh", "min_circularity", "min_contrast"];
+  for (const k of sliders) {
+    const inp = $(`p_${k}`), out = $(`v_${k}`);
+    const init = DEFAULTS[k];
+    inp.value = init; out.textContent = init;
+    inp.oninput = () => { out.textContent = (+inp.value).toFixed(2); };
+  }
+  for (const k of ["min_mm", "max_mm", "max_cands"]) $(`p_${k}`).value = DEFAULTS[k];
+  $("p_rank_mode").value = DEFAULTS.rank_mode;
+  $("viewSel").onchange = render;
+    $("modeSel").onchange = () => {
+    const isDL = $("modeSel").value === "dl";
+    $("detectBtn").textContent = isDL ? "Detect (DL)" : "Detect";
+    render();
+  };
+  for (const id of ["showMask", "showCands", "showGT"]) $(id).onchange = draw;
+  $("resetBtn").onclick = () => {
+    for (const k of ["thresh", "min_circularity", "min_contrast"]) {
+      $(`p_${k}`).value = DEFAULTS[k]; $(`v_${k}`).textContent = DEFAULTS[k];
+    }
+    for (const k of ["min_mm", "max_mm", "max_cands"]) $(`p_${k}`).value = DEFAULTS[k];
+    $("p_rank_mode").value = DEFAULTS.rank_mode;
+    $("maskSel").value = "auto";
+  };
+  $("detectBtn").onclick = render;
+}
+
+function collectParams() {
+  const p = {};
+  for (const k of ["thresh", "min_circularity", "min_contrast",
+                   "min_mm", "max_mm", "max_cands"]) p[k] = +$(`p_${k}`).value;
+  p.rank_mode = $("p_rank_mode").value;
+  return p;
+}
+
+// ── render ────────────────────────────────────────────────────────────────
+let baseImage = null;
+
+async function render() {
+  if (!state.sel) return;
+  const mode = $("modeSel").value;
+  $("status").textContent = "detecting…";
+  let url;
+  if (mode === "dl") {
+    url = "/api/detect_dl?" + new URLSearchParams({
+      name: state.sel.name,
+      score_thresh: "0.05",
+      view: $("viewSel").value,
+    }).toString();
+  } else {
+    const p = collectParams();
+    url = "/api/detect?" + new URLSearchParams({
+      name: state.sel.name, view: $("viewSel").value,
+      mask: $("maskSel").value,
+      ...Object.fromEntries(Object.entries(p).map(([k, v]) => [k, v])),
+    }).toString();
+  }
+  const r = await fetch(url);
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({}));
+    $("status").textContent = "error: " + (j.error || r.status);
+    return;
+  }
+  state.result = await r.json();
+
+  baseImage = new Image();
+  baseImage.onload = () => { draw(); updateMeta(); };
+  baseImage.src = state.result.image;
+  $("status").textContent = state.result.mode === "dl" ? "ready (DL)" : "ready";
+}
+
+function draw() {
+  const cv = $("canvas"), ctx = cv.getContext("2d");
+  const W = cv.width, H = cv.height;
+  ctx.drawImage(baseImage, 0, 0, W, H);
+  if (!state.result) return;
+
+  if ($("showMask").checked && state.result.contours) {
+    ctx.save(); ctx.fillStyle = "rgba(0,255,120,.10)"; ctx.strokeStyle = "rgba(0,255,120,.55)"; ctx.lineWidth = 1.5;
+    for (const poly of state.result.contours) {
+      ctx.beginPath();
+      poly.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  if ($("showGT").checked && state.result.gt) {
+    const g = state.result.gt;
+    ctx.save(); ctx.strokeStyle = "rgba(255,210,63,.95)"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(g.x, g.y, g.r, 0, 2 * Math.PI); ctx.stroke();
+    ctx.fillStyle = "rgba(255,210,63,.85)"; ctx.font = "bold 14px system-ui";
+    ctx.fillText("GT", g.x + g.r + 4, g.y - g.r);
+    ctx.restore();
+  }
+
+  if ($("showCands").checked && state.result.cands) {
+    for (const c of state.result.cands) {
+      const col = c.hit ? "rgba(61,220,132,.95)" : "rgba(255,92,92,.85)";
+      ctx.save(); ctx.strokeStyle = col; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(c.x, c.y, c.r, 0, 2 * Math.PI); ctx.stroke();
+      ctx.fillStyle = col; ctx.font = "11px ui-monospace";
+      ctx.fillText(fmt(c.score), c.x + c.r + 3, c.y - c.r + 2);
+      ctx.restore();
+    }
+  }
+}
+
+function updateMeta() {
+  const r = state.result, rec = state.sel;
+  const tbl = $("imgMeta");
+  tbl.innerHTML = "";
+  const rows = [
+    ["name", rec.name], ["label", rec.label],
+    ["subtlety", rec.subtlety ?? "—"],
+    ["size", rec.size_mm ? rec.size_mm + " mm" : "—"],
+    ["age", rec.age ?? "—"], ["sex", rec.sex ?? "—"],
+    ["mm/px", fmt(r.mm_per_px, 3)],
+  ];
+  for (const [k, v] of rows) {
+    const tr = el("tr"); tr.append(el("td", {}, k), el("td", {}, String(v))); tbl.append(tr);
+  }
+  $("nCands").textContent = r.cands.length;
+  const hits = r.cands.filter(c => c.hit).length;
+  $("nHits").textContent = hits;
+  $("gtText").innerHTML = r.gt
+    ? `<span class="badge ${hits ? "tp" : "miss"}">${hits ? "detected" : "missed"}</span>`
+    : `<span class="badge fp">no GT</span>`;
+  const box = $("candList"); box.innerHTML = "";
+  r.cands.slice(0, 8).forEach((c, i) => {
+    const b = c.hit ? `<span class="badge tp">hit</span>` : `<span class="badge fp">FP</span>`;
+    box.append(el("div", {}, `${i + 1}. ${b} score=${fmt(c.score)} d=${fmt(c.diam_mm, 1)}mm`));
+  });
+}
+
+// ── share / cases ─────────────────────────────────────────────────────────
+async function loadCases() {
+  const r = await fetch("/api/cases"); if (!r.ok) return;
+  const list = await r.json(); const box = $("cases"); box.innerHTML = "";
+  if (!list.length) { box.append(el("div", { class: "c" }, "no cases published yet")); return; }
+  for (const c of list) {
+    const it = el("div", { class: "c" },
+      el("div", {}, `${c.name}  ·  ${c.author || "anon"}`),
+      el("div", { class: "slug" }, c.slug));
+    it.onclick = () => viewCase(c.slug);
+    box.append(it);
+  }
+}
+
+async function publishCase() {
+  if (!state.sel) return;
+  const token = $("caseToken").value.trim();
+  if (!token) { $("shareOut").textContent = "server X-Cases-Token required"; return; }
+  $("shareOut").textContent = "publishing…";
+  const body = {
+    name: state.sel.name, params: collectParams(), mask: $("maskSel").value,
+    author: $("caseAuthor").value, notes: $("caseNotes").value,
+  };
+  const r = await fetch("/api/cases", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Cases-Token": token },
+    body: JSON.stringify(body),
+  });
+  const j = await r.json();
+  if (!r.ok) { $("shareOut").textContent = "error: " + (j.error || r.status); return; }
+  $("shareOut").innerHTML = `published: <code>${j.slug}</code>`;
+  loadCases();
+}
+
+async function viewCase(slug) {
+  const r = await fetch("/api/cases/" + slug);
+  if (!r.ok) return;
+  const c = await r.json();
+  state.sel = state.recs.find(x => x.name === c.name) || { name: c.name };
+  // set params from case, then re-render with those params
+  for (const [k, v] of Object.entries(c.params)) {
+    if ($(`p_${k}`)) { $(`p_${k}`).value = v; if ($(`v_${k}`)) $(`v_${k}`).textContent = (+v).toFixed(2); }
+  }
+  await render();
+  const ov = new Image();
+  ov.onload = () => {
+    const cv = $("canvas"), ctx = cv.getContext("2d");
+    ctx.drawImage(ov, 0, 0, cv.width, cv.height);
+  };
+  ov.src = c.overlay;
+  showCaseBar(true, c);
+}
+
+function showCaseBar(on, c) {
+  $("caseBar").classList.toggle("show", on);
+  if (on && c) {
+    $("caseSlug").textContent = c.slug;
+    $("caseNotes").textContent = c.notes || "";
+  }
+}
+$("closeCase").onclick = () => showCaseBar(false);
+$("shareBtn").onclick = publishCase;
+
+
+
+// ── boot ──────────────────────────────────────────────────────────────────
+(async () => {
+  bindParams();
+  await loadList();
+  await loadCases();
+  // check whether DL model is available at startup
+fetch("/api/status").then(r => r.json()).then(s => {
+  if (!s.ok) {
+    const opt = document.querySelector('#modeSel option[value="dl"]');
+    opt.textContent = 'deep (unavailable)';
+    opt.disabled = true;
+  }
+});
+  if (state.recs.length) selectImage(state.recs[0].name);
+})();
+
+</script>
+</body>
+</html>
